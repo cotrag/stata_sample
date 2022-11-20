@@ -1,0 +1,78 @@
+* This code is a shell code of a work product at my current job. I am renaming all variables/filepaths to avoid conflicts. The goal is to summarize variables by different subgroups and time periods, and write the summary out to an excel file. The shell code itself is a simplified version of the actual analysis, and cleaning is assumed to already have been done. 
+
+* Written by Connor Tragesser, 
+
+* Set Current Directory, within which it's assumed to have the data in a folder named data, an outfiles older to put intermediate files, and a folder named logs within which logs can be saved. Edit according to specific placement for current user
+cd "User/filepath/"
+
+* initiate log 
+log using logs "data_analaysis.txt"
+
+* import data
+use "data/file_for_analysis.dta", clear 
+
+* This dataset is a set of customers accross multiple different businesses, with various credit characteristics taken quarterly over time. It is currently WIDE in terms of characterstics, with a variable naming structure of "creditcaracteristic""YYYYMM" Where MM corresponds to the last month of a given quarter, 03 for Q1, 06 for Q2, etc. I transformed this dataset in the past.
+
+isid business_code customer_id // if this were to fail, explore dupicates 
+
+* For this summary, we only want to consider the FIRST quarter in which the customer enrolled in the program (given by the quarter_enrolled variable). This variable is already in the same YYYYMM structure cited above.
+
+assert !mi(q_enrolled_in_program) // explore missings in fails
+tab q_enrolled_in_program, m
+levelsof q_enrolled_in_program, local(quarters)
+
+* list of vars we want to analyze
+local cred_vars_to_analyze var1 var2 var3 var4 
+
+* generate a variable that is just the credit chracteristic, no date, and fill it in w/ the value at the quarter of interest
+foreach v in `cred_vars_to_analyze' {
+    gen `v' = .
+    foreach q in `quarters' {
+        capture noi confirm variable `v'`q'
+        if _rc == 0 replace `v' == `v'`q' if q_enrolled_in_program == `q'
+        if _rc != 0 continue 
+    }
+}
+
+* generate indicators for population splits 
+summ dt_enr_in_prog, d f 
+assert inrange(dt_enr_in_prog, mdy(01,01,2019), mdy(01,01,2022) // reasonable
+
+* doi == date of interest 
+gen before_doi = dt_enr_in_prog < mdy(01,01,2020)
+gen on_after_doi = dt_enr_in_prog >= mdy(01,01,2020)
+assert before_doi + on_after_doi == 1
+
+tab persontype, m 
+assert inlist(persontype, "A", "B", "C")
+
+foreach x in A B C {
+    gen type_`x' = persontype == "`x"
+}
+
+tempfile final_dta
+save `final_dta'
+
+* Write analysis loop for these continuous variables. Just do means and difference, for now 
+file open myout using "outfiles\summary.txt", write replace 
+file write myout "person_type|variable|pre_date|post_date|difference" _n 
+
+foreach type in A B C {
+    use final_dta if type_`type' == 1 
+    foreach var in `cred_vars_to_analyze' {
+        foreach time in before_doi on_after_doi {
+            summ `var' if `time' == 1 
+            local mean_`time' = r(mean)
+        }
+        local dif = `mean_on_after_doi' - `mean_before_doi'
+        file write myout "`type'|`mean_before_doi'|`mean_on_after_doi'|`dif'" _n
+    }
+}
+
+file close myout 
+
+* import file just written and export to excel for ease of presentation
+import delimited "outfiles\summary.txt", clear 
+export excel using "outfiles\summary.xlsx", sheet("table",replace) first(var)
+
+log close 
